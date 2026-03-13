@@ -1,0 +1,93 @@
+name: "agent-verify"
+description: "AI code verification — validates AI-generated code does what was intended"
+
+inputs:
+  diff_ref:
+    description: "Git ref to diff against"
+    required: false
+    default: "origin/${{ github.base_ref }}"
+  pr_body:
+    description: "PR description text for intent extraction"
+    required: false
+    default: "${{ github.event.pull_request.body }}"
+  spec_file:
+    description: "Path to spec file (SPEC.md, RFC). Auto-detected if omitted."
+    required: false
+    default: ""
+  fail_on_warn:
+    description: "Fail the check on WARN verdict (not just FAIL)"
+    required: false
+    default: "false"
+  use_llm:
+    description: "Use LLM for spec-code alignment (requires ANTHROPIC_API_KEY)"
+    required: false
+    default: "false"
+
+outputs:
+  verdict:
+    description: "Verification verdict: pass, warn, or fail"
+    value: ${{ steps.verify.outputs.verdict }}
+  confidence:
+    description: "Confidence score (0.0–1.0)"
+    value: ${{ steps.verify.outputs.confidence }}
+  report_json:
+    description: "Full verification report as JSON"
+    value: ${{ steps.verify.outputs.report_json }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install agent-verify
+      shell: bash
+      run: pip install agent-verify
+
+    - name: Write PR body to temp file
+      shell: bash
+      run: |
+        cat > "$RUNNER_TEMP/pr_body.txt" <<'PRBODYEOF'
+        ${{ inputs.pr_body }}
+        PRBODYEOF
+
+    - name: Run agent-verify
+      id: verify
+      shell: bash
+      run: |
+        ARGS="--diff ${{ inputs.diff_ref }} --json-output"
+
+        if [ -s "$RUNNER_TEMP/pr_body.txt" ]; then
+          ARGS="$ARGS --pr-body-file $RUNNER_TEMP/pr_body.txt"
+        fi
+
+        if [ -n "${{ inputs.spec_file }}" ]; then
+          ARGS="$ARGS --spec ${{ inputs.spec_file }}"
+        fi
+
+        if [ "${{ inputs.fail_on_warn }}" = "true" ]; then
+          ARGS="$ARGS --fail-on-warn"
+        fi
+
+        if [ "${{ inputs.use_llm }}" = "true" ]; then
+          ARGS="$ARGS --llm"
+        fi
+
+        set +e
+        OUTPUT=$(agent-verify check $ARGS 2>/dev/null)
+        EXIT_CODE=$?
+        set -e
+
+        echo "report_json<<JSONEOF" >> "$GITHUB_OUTPUT"
+        echo "$OUTPUT" >> "$GITHUB_OUTPUT"
+        echo "JSONEOF" >> "$GITHUB_OUTPUT"
+
+        VERDICT=$(echo "$OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['verdict'])" 2>/dev/null || echo "unknown")
+        CONFIDENCE=$(echo "$OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('confidence','0.0'))" 2>/dev/null || echo "0.0")
+
+        echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
+        echo "confidence=$CONFIDENCE" >> "$GITHUB_OUTPUT"
+
+        exit $EXIT_CODE
