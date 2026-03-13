@@ -75,15 +75,16 @@ def compute_ast_diff(
         return []
 
     try:
+        import warnings
+
         import tree_sitter_languages as tsl
         from tree_sitter import Parser
 
-        lang_obj = tsl.get_language(language)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            lang_obj = tsl.get_language(language)
         parser = Parser()
-        try:
-            parser.language = lang_obj
-        except TypeError:
-            parser = Parser(lang_obj)
+        parser.set_language(lang_obj)
 
         old_tree = parser.parse(bytes(old_content, "utf8"))
         new_tree = parser.parse(bytes(new_content, "utf8"))
@@ -93,7 +94,7 @@ def compute_ast_diff(
 
         return _compare_definitions(old_defs, new_defs, file_path)
 
-    except (ImportError, TypeError, Exception):
+    except (ImportError, TypeError, OSError):
         return _fallback_diff(old_content, new_content, file_path)
 
 
